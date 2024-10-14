@@ -1,1 +1,1 @@
-# IA-et-Plateforme-de-Formation
+# IA et Plateforme de Formation

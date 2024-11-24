@@ -13,26 +13,49 @@ def generer_hash(*args):
 
 # Charger le fichier CSV avec gestion des erreurs
 try:
-    df = pd.read_csv('db_btc-touchpoint_clean.csv', on_bad_lines='skip', quoting=1, encoding='utf-8')
+    df = pd.read_csv('output.csv', on_bad_lines='skip', quoting=1, encoding='utf-8')
 except Exception as e:
     print(f"Erreur lors de la lecture du CSV: {e}")
 
 # Ajouter une colonne vide 'hash_id' pour toutes les lignes
-df['hash_id'] = ''
+#df['hash_id'] = ''
 
-# Filtrer uniquement les lignes avec des liens YouTube
-sous_chaine_Youtube = 'youtu'
-results = df[df['links'].str.contains(sous_chaine_Youtube, na=False)]
+sous_chaine_Youtube_1 = "youtu.be"
+sous_chaine_Youtube_2 = "youtube"
+
+def verifier_presence(url, sous_chaine1, sous_chaine2):
+
+    if sous_chaine1 in url:
+
+        # Extraire l'ID de la vidéo
+        video_id = url.split('youtu.be/')[1].split('?')[0]
+
+        if '?t=' in url :
+            param_t = url.split('?t=')[1]
+            complete_id =video_id+"&t="+param_t
+            
+        else :
+            complete_id = video_id
+        
+    elif sous_chaine2 in url :
+        complete_id = url.replace('https://www.youtube.com/watch?v=', '') 
+    
+    return(complete_id)
+    
 
 # Créer une liste pour stocker les données JSON
 json_data = []
 
+# Filtrer uniquement les lignes avec des liens YouTube
+YoutubeLink = 'youtu'
+results = df[df['links'].str.contains(YoutubeLink, na=False)]
+
 # Parcourir chaque URL YouTube dans les résultats filtrés
 for index, row in results.iterrows():
+
     url_Youtube = row['links']
-    
-    # Extraire l'ID de la vidéo
-    video_id = url_Youtube.replace('https://www.youtube.com/watch?v=', '')
+
+    video_id = verifier_presence(url_Youtube, sous_chaine_Youtube_1, sous_chaine_Youtube_2)
     
     try:
         # Essayer d'obtenir la transcription de la vidéo
@@ -42,7 +65,7 @@ for index, row in results.iterrows():
         output = ' '.join([x['text'] for x in transcript])
 
         # Générer un identifiant de hashage basé sur les informations de la ligne
-        hash_id = generer_hash(row['id'], row['title'], row['links'], row['titre'], row['auteur'], str(row['duree_hh_mm_ss']))
+        hash_id = generer_hash(row['id'], row['title'], row['subtitle'], row['links'])
         df.at[index, 'hash_id'] = hash_id
 
         # Créer une entrée JSON pour cette ligne
@@ -57,11 +80,10 @@ for index, row in results.iterrows():
 
     except Exception as e:
         # En cas d'erreur (ex. transcription non disponible), ignorer la vidéo
-        print(f"Erreur pour la vidéo {video_id}: {e}")
-        continue
+        pass
 
 # Sauvegarder les données dans un fichier JSON
-with open("transcriptions_finale.json", "w", encoding='utf-8') as json_file:
+with open("transcriptions_finales.json", "w", encoding='utf-8') as json_file:
     json.dump(json_data, json_file, ensure_ascii=False, indent=4)
 
 print("Les transcriptions ont été sauvegardées dans transcriptions_finale.json.")

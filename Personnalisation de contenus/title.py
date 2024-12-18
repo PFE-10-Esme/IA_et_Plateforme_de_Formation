@@ -1,29 +1,57 @@
 import openai
+import re
 import pandas as pd
 import json
 import time
 import os
+import tiktoken  # Library to estimate token count
+
+# Initialize the tokenizer for the specific OpenAI model
+tokenizer = tiktoken.encoding_for_model("gpt-3.5-turbo")
+
+# Function to truncate text based on token limit
+def truncate_text(text, max_tokens):
+    tokens = tokenizer.encode(text)
+    truncated_tokens = tokens[:max_tokens]
+    return tokenizer.decode(truncated_tokens)
 
 # Load environment variable for API key
-openai.api_key = "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"
+openai.api_key = "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"
 
 # Load JSON data and CSV
-with open("transcriptions_finales.json", "r", encoding='utf-8') as json_file:
+with open("nouveau_fichier.json", "r", encoding='utf-8') as json_file:
     json_data = json.load(json_file)
 
-df = pd.read_csv("description.csv", index_col=False)
+df = pd.read_csv("summary.csv", index_col=False)
 
-# Filter the rows that correspond to YouTube videos
-Type = 'Video Youtube'
-results = df[(df['type'].str.contains(Type, na=False)) & (df['hash_id'].notna())]
+df['keywords'] = None
+df['Titre_BTC'] = None
 
-df['titles_bis'] = ''
-
-# Create a dictionary indexed by hash_id for faster lookup
-json_indexed = {x["id"]: x["transcription"] for x in json_data}
+# Create a dictionary indexed by hash_id and check transcription type dynamically
+json_indexed = {}
+for x in json_data:
+    if x.get("transcription_video"):
+        json_indexed[x["id"]] = x["transcription_video"]
+    elif x.get("transcription_page_web"):
+        json_indexed[x["id"]] = x["transcription_page_web"]
+    elif x.get("transcription_podcast"):
+        json_indexed[x["id"]] = x["transcription_podcast"]
 
 def index_json(hash_id):
     return json_indexed.get(hash_id)  # Fast lookup in the dictionary
+
+def clean_title(text):
+
+    if not isinstance(text, str):  # Vérifie que le texte est une chaîne
+        return ""
+    
+    # Expression régulière pour capturer uniquement le texte entre guillemets doubles
+    matches = re.findall(r'"([^"]+)"', text)
+    return " ".join(matches)
+
+# Filter the rows that correspond to YouTube videos
+results = df[df['summary'].notna()]
+results = results.head(100)
 
 # Process each YouTube video
 for index, row in results.iterrows():
@@ -35,43 +63,71 @@ for index, row in results.iterrows():
     auteur = row['auteur']
     hash_id = row['hash_id']
     transcription = index_json(hash_id)
-    summary_bis = row['summary_bis']
-    description_bis = row['description_bis']
 
     if not transcription:
         print(f"No transcription found for {title}")
         continue  # Skip if no transcription
 
+    # Truncate the transcription to ensure it fits the token limit
+    max_input_tokens = 12000  # Adjust this value to ensure space for the prompt and response
+    truncated_transcription = truncate_text(transcription, max_input_tokens)
+
     try:
-        # Prepare the prompt for GPT-4 Chat model
-        prompt_titles = f"""Résume en 3 ou 4 lignes le texte que je vais te fournir et qui provient d'un contenu {type}.
+
+        prompt_keywords = f"""Donne un ensemble de mots-clés à partir du contenu suivant et des infos suivantes: {type}.
+        Attention si la dernier mot n'est pas complet, coupe-le.
+        Tu peux me prendre 8 et 10 mots-clés les pertinents et plus cohérents avec toutes les informations cités ci-dessus.
         Le {type} aborde le thème : {title}. Il a pour sous-thème : {subtitle}. 
         Il aborde une question : {quadrant}.
-        Le titre du contenu est {titre}.
-        L'auteur ou le groupe d'auteurs du contenu est {auteur}.
-        Aide toi du résumé et des mots-clés pour donner un titre à mon contenu  {type}: {summary_bis} et {description_bis}
-        Le dernier mot doit être complet et ne doit pas être une conjonction de coordination ou un adverbe."""
+        Le titre du contenu est {titre}. Attention si le titre est nan ne prend pas le titre comme paramètre pour faire les mots-clés.
+        Aide toi de la transcription du {type} pour trouver les différents mots-clés : {truncated_transcription}
+        Sépare moi les différents mots-clés par des virgules."""
 
-        # Call GPT-3.5 or GPT-4 Chat model using the 'chat/completions' endpoint
-        response_title = openai.ChatCompletion.create(
-            model="gpt-3.5-turbo",  # or use "gpt-4" if you're using GPT-4
+        response_keywords = openai.ChatCompletion.create(
+            model="gpt-3.5-turbo",
             messages=[
                 {"role": "system", "content": "You are a helpful assistant."},
-                {"role": "user", "content": prompt_titles},
+                {"role": "user", "content": prompt_keywords},
             ],
-            max_tokens=50,  # limit for summary length
+            max_tokens=150,
             temperature=0.7,
         )
-        # Extract summary from the response
-        title = response_title['choices'][0]['message']['content'].strip()
-        df.at[index, 'titles_bis'] = title
 
-        # Rate limiting: sleep for a short period to avoid overloading the API
-        time.sleep(2)
+        keywords = response_keywords['choices'][0]['message']['content'].strip()
+
+
+        prompt_title = f"""Donne un titre en français et mets-le entre des guillements à partir de cette transcription: {truncated_transcription}.
+        Les mots-clés reliés au contenus sont {keywords}
+        On a comme thème pour ce contenu {title}. Il a pour sous-thème : {subtitle}. 
+        Il aborde une question : {quadrant}.
+        Si la dernier mot n'est pas complet, coupe-le."""
+
+        response_title = openai.ChatCompletion.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {"role": "system", "content": "You are a helpful assistant."},
+                {"role": "user", "content": prompt_title},
+            ],
+            max_tokens=40,
+            temperature=0.7,
+        )
+
+        title = response_title['choices'][0]['message']['content'].strip()
+
+        df.at[index, 'keywords'] = keywords
+        df.at[index, 'Titre_BTC'] = title
+        print(keywords)
+        print(title)
+
+        time.sleep(1)
 
     except Exception as e:
         # Handle any exceptions that may occur (e.g., network issues, API errors)
+        print(f"Error processing {title}: {e}")
         pass
 
+print("On applique la fonction de nettoyage pour les titres")
+df['Titre_BTC'] = df['Titre_BTC'].apply(clean_title)
+
 # Save the updated DataFrame to a new CSV file
-df.to_csv("titles.csv", index=False)
+df.to_csv("final_csv.csv", index=False)
